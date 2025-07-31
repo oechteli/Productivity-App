@@ -1,0 +1,413 @@
+import { create } from 'zustand'
+import { devtools } from 'zustand/middleware'
+import { todoOperations, projectOperations, areaOperations, authOperations } from '@/lib/supabase'
+import type { FilterOptions, SortOptions, GroupOptions } from '@/types'
+
+// Use Supabase types directly to avoid conflicts
+type Todo = any
+type Project = any
+type Area = any
+type Category = any
+
+// Available assignees - can be moved to a separate config or fetched from backend
+const availableAssignees = [
+  { id: 'max-hoffmann', name: 'Max Hoffmann', color: 'bg-blue-100 text-blue-700' },
+  { id: 'anna-lutz', name: 'Anna Lutz', color: 'bg-green-100 text-green-700' },
+  { id: 'tom-weber', name: 'Tom Weber', color: 'bg-purple-100 text-purple-700' },
+  { id: 'lisa-mueller', name: 'Lisa Müller', color: 'bg-pink-100 text-pink-700' },
+  { id: 'jan-schmidt', name: 'Jan Schmidt', color: 'bg-orange-100 text-orange-700' },
+]
+
+interface TodoState {
+  // Data
+  todos: Todo[]
+  categories: Category[]
+  projects: Project[]
+  areas: Area[]
+  
+  // UI State
+  filters: FilterOptions
+  sort: SortOptions
+  group: GroupOptions
+  isLoading: boolean
+  error: string | null
+  
+  // Actions
+  loadTodos: () => Promise<void>
+  loadProjects: () => Promise<void>
+  loadAreas: () => Promise<void>
+  
+  addTodo: (todo: Omit<Todo, 'id' | 'created_at' | 'updated_at'>) => Promise<void>
+  updateTodo: (id: string, updates: Partial<Todo>) => Promise<void>
+  deleteTodo: (id: string) => Promise<void>
+  toggleTodo: (id: string) => Promise<void>
+  
+  addProject: (project: Omit<Project, 'id' | 'created_at' | 'updated_at'>) => Promise<void>
+  updateProject: (id: string, updates: Partial<Project>) => Promise<void>
+  deleteProject: (id: string) => Promise<void>
+  
+  addArea: (area: Omit<Area, 'id' | 'created_at' | 'updated_at'>) => Promise<void>
+  updateArea: (id: string, updates: Partial<Area>) => Promise<void>
+  deleteArea: (id: string) => Promise<void>
+  
+  setFilters: (filters: Partial<FilterOptions>) => void
+  clearFilters: () => void
+  setSort: (sort: Partial<SortOptions>) => void
+  setGroup: (group: Partial<GroupOptions>) => void
+  
+  // Computed
+  filteredTodos: Todo[]
+  getProjectById: (id: string) => Project | undefined
+  getAreaById: (id: string) => Area | undefined
+  getCategoryById: (id: string) => Category | undefined
+}
+
+const initialFilters: FilterOptions = {
+  search: '',
+  status: 'all',
+  priorities: [],
+  due_dates: [],
+  assignees: [],
+  start_dates: [],
+  areas: [],
+  projects: [],
+}
+
+const initialSort: SortOptions = {
+  field: 'created_at',
+  direction: 'desc'
+}
+
+const initialGroup: GroupOptions = {
+  field: 'none'
+}
+
+// Mock categories (can be replaced with Supabase data later)
+const mockCategories: Category[] = [
+  {
+    id: 'work',
+    user_id: 'system',
+    name: 'Arbeit',
+    color: 'bg-blue-100 text-blue-700',
+    position: 0,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+  {
+    id: 'personal',
+    user_id: 'system',
+    name: 'Persönlich',
+    color: 'bg-green-100 text-green-700',
+    position: 1,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  },
+]
+
+export const useTodoStore = create<TodoState>()(
+  devtools(
+    (set, get) => ({
+      // Initial state
+      todos: [],
+      categories: mockCategories,
+      projects: [],
+      areas: [],
+      filters: initialFilters,
+      sort: initialSort,
+      group: initialGroup,
+      isLoading: false,
+      error: null,
+
+      // Load data from Supabase
+      loadTodos: async () => {
+        try {
+          set({ isLoading: true, error: null })
+          const user = await authOperations.getCurrentUser()
+          if (!user) throw new Error('User not authenticated')
+          
+          const todos = await todoOperations.getAll(user.id)
+          set({ todos, isLoading: false })
+        } catch (error: any) {
+          set({ error: error.message, isLoading: false })
+        }
+      },
+
+      loadProjects: async () => {
+        try {
+          const user = await authOperations.getCurrentUser()
+          if (!user) throw new Error('User not authenticated')
+          
+          const projects = await projectOperations.getAll(user.id)
+          set({ projects })
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      loadAreas: async () => {
+        try {
+          const user = await authOperations.getCurrentUser()
+          if (!user) throw new Error('User not authenticated')
+          
+          const areas = await areaOperations.getAll(user.id)
+          set({ areas })
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      // Todo operations
+      addTodo: async (todoData) => {
+        try {
+          const user = await authOperations.getCurrentUser()
+          if (!user) throw new Error('User not authenticated')
+
+          const newTodo = await todoOperations.create({
+            ...todoData,
+            user_id: user.id,
+          })
+          
+          set((state) => ({
+            todos: [...state.todos, newTodo]
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      updateTodo: async (id, updates) => {
+        try {
+          const updatedTodo = await todoOperations.update(id, updates)
+          
+          set((state) => ({
+            todos: state.todos.map((todo) =>
+              todo.id === id ? updatedTodo : todo
+            )
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      deleteTodo: async (id) => {
+        try {
+          await todoOperations.delete(id)
+          
+          set((state) => ({
+            todos: state.todos.filter((todo) => todo.id !== id)
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      toggleTodo: async (id) => {
+        try {
+          const updatedTodo = await todoOperations.toggle(id)
+          
+          set((state) => ({
+            todos: state.todos.map((todo) =>
+              todo.id === id ? updatedTodo : todo
+            )
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      // Project operations
+      addProject: async (projectData) => {
+        try {
+          const user = await authOperations.getCurrentUser()
+          if (!user) throw new Error('User not authenticated')
+
+          const newProject = await projectOperations.create({
+            ...projectData,
+            user_id: user.id,
+            allowed_assignees: projectData.allowedAssignees || []
+          })
+          
+          set((state) => ({
+            projects: [...state.projects, {
+              ...newProject,
+              allowedAssignees: newProject.allowed_assignees
+            }]
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      updateProject: async (id, updates) => {
+        try {
+          const { allowedAssignees, ...otherUpdates } = updates
+          const supabaseUpdates = {
+            ...otherUpdates,
+            ...(allowedAssignees && { allowed_assignees: allowedAssignees })
+          }
+          
+          const updatedProject = await projectOperations.update(id, supabaseUpdates)
+          
+          set((state) => ({
+            projects: state.projects.map((project) =>
+              project.id === id ? {
+                ...updatedProject,
+                allowedAssignees: updatedProject.allowed_assignees
+              } : project
+            )
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      deleteProject: async (id) => {
+        try {
+          await projectOperations.delete(id)
+          
+          set((state) => ({
+            projects: state.projects.filter((project) => project.id !== id)
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      // Area operations
+      addArea: async (areaData) => {
+        try {
+          const user = await authOperations.getCurrentUser()
+          if (!user) throw new Error('User not authenticated')
+
+          const newArea = await areaOperations.create({
+            ...areaData,
+            user_id: user.id,
+          })
+          
+          set((state) => ({
+            areas: [...state.areas, newArea]
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      updateArea: async (id, updates) => {
+        try {
+          const updatedArea = await areaOperations.update(id, updates)
+          
+          set((state) => ({
+            areas: state.areas.map((area) =>
+              area.id === id ? updatedArea : area
+            )
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      deleteArea: async (id) => {
+        try {
+          await areaOperations.delete(id)
+          
+          set((state) => ({
+            areas: state.areas.filter((area) => area.id !== id)
+          }))
+        } catch (error: any) {
+          set({ error: error.message })
+        }
+      },
+
+      // Filter/Sort/Group operations
+      setFilters: (filters) => {
+        set((state) => ({
+          filters: { ...state.filters, ...filters }
+        }))
+      },
+
+      clearFilters: () => {
+        set({ filters: initialFilters })
+      },
+
+      setSort: (sort) => {
+        set((state) => ({
+          sort: { ...state.sort, ...sort }
+        }))
+      },
+
+      setGroup: (group) => {
+        set((state) => ({
+          group: { ...state.group, ...group }
+        }))
+      },
+
+      // Computed properties
+      get filteredTodos() {
+        const { todos, filters } = get()
+        
+        return todos.filter((todo) => {
+          // Search filter
+          if (filters.search && !todo.title.toLowerCase().includes(filters.search.toLowerCase())) {
+            return false
+          }
+
+          // Status filter
+          if (filters.status === 'completed' && !todo.completed) return false
+          if (filters.status === 'pending' && todo.completed) return false
+
+          // Priority filter
+          if (filters.priorities.length > 0 && !filters.priorities.includes(todo.priority)) {
+            return false
+          }
+
+          // Due date filter
+          if (filters.due_dates.length > 0 && (!todo.due_date || !filters.due_dates.includes(todo.due_date))) {
+            return false
+          }
+
+          // Start date filter
+          if (filters.start_dates.length > 0 && (!todo.start_date || !filters.start_dates.includes(todo.start_date))) {
+            return false
+          }
+
+          // Assignees filter
+          if (filters.assignees.length > 0) {
+            if (!todo.assignees || !filters.assignees.some(assignee => todo.assignees!.includes(assignee))) {
+              return false
+            }
+          }
+
+          // Area filter
+          if (filters.areas.length > 0 && (!todo.area || !filters.areas.includes(todo.area))) {
+            return false
+          }
+
+          // Project filter
+          if (filters.projects.length > 0 && (!todo.project || !filters.projects.includes(todo.project))) {
+            return false
+          }
+
+          return true
+        })
+      },
+
+      getProjectById: (id) => {
+        return get().projects.find((project) => project.id === id)
+      },
+
+      getAreaById: (id) => {
+        return get().areas.find((area) => area.id === id)
+      },
+
+      getCategoryById: (id) => {
+        return get().categories.find((category) => category.id === id)
+      },
+    }),
+    {
+      name: 'todo-store',
+    }
+  )
+)
+
+// Export available assignees for use in components
+export { availableAssignees } 
